@@ -9,8 +9,15 @@
 #include "logger.h"
 #include "process_manager.h"
 
+/* Events collected during one pass through the wait loop. */
+typedef struct {
+    int child_exited;
+    int periodic_check;
+    int status_requested;
+} events_t;
 
-static int wait_for_events(const sigset_t *event_signals, int *status_requested)
+
+static int wait_for_events(const sigset_t *event_signals, events_t *events)
 {
     sigset_t previous_mask;
 
@@ -19,12 +26,15 @@ static int wait_for_events(const sigset_t *event_signals, int *status_requested)
         return -1;
     }
 
-    *status_requested = 0;
+    *events = (events_t){0};
 
     while (!sm_shutdown_requested()) {
-        *status_requested = sm_take_status_request();
+        events->child_exited = pm_take_chld();
+        events->periodic_check = pm_take_alrm();
+        events->status_requested = sm_take_status_request();
 
-        if (*status_requested) {
+        if (events->child_exited || events->periodic_check ||
+            events->status_requested) {
             break;
         }
 
@@ -68,6 +78,7 @@ int main(void)
         return EXIT_FAILURE;
     }
 
+    /* Make logging available during process manager setup. */
     if(logger_open("watchdog.log") == -1){
         perror("watchdog.log");
         return EXIT_FAILURE;
@@ -89,22 +100,30 @@ int main(void)
     int exit_status = EXIT_SUCCESS;
 
     while (!sm_shutdown_requested()) {
-        int status_requested;
+        events_t events;
 
-        if (wait_for_events(&event_signals, &status_requested) == -1) {
+        if (wait_for_events(&event_signals, &events) == -1) {
             perror("Waiting for signals");
             exit_status = EXIT_FAILURE;
             break;
         }
 
-        if (!sm_shutdown_requested() && status_requested) {
-           int count;
-           const child_t *children = pm_get_children(&count);
+        if (events.child_exited) {
+            pm_reap_children(sm_shutdown_requested());
+        }
 
-           if(logger_status(children, count) == -1)
-           {
-            perror("Writing status report");
-           }
+        if (events.periodic_check && !sm_shutdown_requested()) {
+            pm_periodic_check();
+        }
+
+        if (events.status_requested && !sm_shutdown_requested()) {
+            int count;
+            const child_t *children = pm_get_children(&count);
+
+            /* A failed status report should not stop monitoring. */
+            if (logger_status(children, count) == -1) {
+                perror("Writing status report");
+            }
         }
     }
 
