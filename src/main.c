@@ -9,6 +9,8 @@
 #include "logger.h"
 #include "process_manager.h"
 
+#define SHUTDOWN_TIMEOUT_SECONDS 5
+
 /* Events collected during one pass through the wait loop. */
 typedef struct {
     int child_exited;
@@ -99,7 +101,12 @@ int main(void)
 
     int exit_status = EXIT_SUCCESS;
 
-    while (!sm_shutdown_requested()) {
+    if (!sm_shutdown_requested() && pm_start_all() == -1) {
+        perror("Starting workers");
+        exit_status = EXIT_FAILURE;
+    }
+
+    while (exit_status == EXIT_SUCCESS && !sm_shutdown_requested()) {
         events_t events;
 
         if (wait_for_events(&event_signals, &events) == -1) {
@@ -125,6 +132,19 @@ int main(void)
                 perror("Writing status report");
             }
         }
+    }
+
+    if (logger_event("SHUTDOWN", NULL) == -1) {
+        perror("Writing shutdown log");
+        exit_status = EXIT_FAILURE;
+    }
+
+    /* Also clean up workers created before a partial startup failure. */
+    pm_terminate_all(SHUTDOWN_TIMEOUT_SECONDS);
+
+    if (logger_event("SHUTDOWN_DONE", NULL) == -1) {
+        perror("Writing shutdown completion log");
+        exit_status = EXIT_FAILURE;
     }
 
     if(logger_close() == -1)
