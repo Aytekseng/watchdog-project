@@ -54,6 +54,8 @@ int main(void)
     sigaddset(&event_signals, SIGINT);
     sigaddset(&event_signals, SIGTERM);
     sigaddset(&event_signals, SIGUSR1);
+    sigaddset(&event_signals, SIGCHLD);
+    sigaddset(&event_signals, SIGALRM);
 
     /* Defer delivery of event signals until their handlers are installed. */
     if (sigprocmask(SIG_BLOCK, &event_signals, &previous_mask) == -1) {
@@ -68,6 +70,12 @@ int main(void)
 
     if(logger_open("watchdog.log") == -1){
         perror("watchdog.log");
+        return EXIT_FAILURE;
+    }
+
+        if (pm_init() == -1) {
+        perror("Process manager setup");
+        (void)logger_close();
         return EXIT_FAILURE;
     }
 
