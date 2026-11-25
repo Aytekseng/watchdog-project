@@ -6,6 +6,8 @@
 #include <stdlib.h>
 
 #include "signal_manager.h"
+#include "logger.h"
+
 
 static int wait_for_events(const sigset_t *event_signals, int *status_requested)
 {
@@ -63,18 +65,27 @@ int main(void)
         return EXIT_FAILURE;
     }
 
+    if(logger_open("watchdog.log") == -1){
+        perror("watchdog.log");
+        return EXIT_FAILURE;
+    }
+
     /* Restore the startup mask before entering the event loop. */
     if (sigprocmask(SIG_SETMASK, &previous_mask, NULL) == -1) {
         perror("sigprocmask");
+        (void)logger_close();
         return EXIT_FAILURE;
     }
+
+    int exit_status = EXIT_SUCCESS;
 
     while (!sm_shutdown_requested()) {
         int status_requested;
 
         if (wait_for_events(&event_signals, &status_requested) == -1) {
             perror("Waiting for signals");
-            return EXIT_FAILURE;
+            exit_status = EXIT_FAILURE;
+            break;
         }
 
         if (!sm_shutdown_requested() && status_requested) {
@@ -83,5 +94,11 @@ int main(void)
         }
     }
 
-    return EXIT_SUCCESS;
+    if(logger_close() == -1)
+    {
+        perror("Closing watchdog.log");
+        exit_status = EXIT_FAILURE;
+    }
+
+    return exit_status;
 }
