@@ -7,6 +7,7 @@
 
 #include "signal_manager.h"
 #include "logger.h"
+#include "process_manager.h"
 
 
 static int wait_for_events(const sigset_t *event_signals, int *status_requested)
@@ -89,8 +90,13 @@ int main(void)
         }
 
         if (!sm_shutdown_requested() && status_requested) {
-            /* Replace this message with the status report during integration. */
-            puts("Status request received.");
+           int count;
+           const child_t *children = pm_get_children(&count);
+
+           if(logger_status(children, count) == -1)
+           {
+            perror("Writing status report");
+           }
         }
     }
 
