@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -32,7 +33,7 @@ static const int child_count = 3;
 static volatile sig_atomic_t got_chld = 0;
 static volatile sig_atomic_t got_alrm = 0;
 
-// return 1 if SIGCHILD arrived and clear the flag
+// return 1 if SIGCHLD arrived and clear the flag
 int pm_take_chld(void){
     int got = got_chld;
     got_chld = 0;
@@ -101,11 +102,34 @@ int pm_init(void){
 }
 
 // fork and exec worker i, record its pid
+// a close-on-exec pipe tells the parent whether exec really succeeded
 static int spawn(int i){
-    pid_t pid = fork();
+    int fds[2];
+    int child_errno = 0;
+    ssize_t n;
+    pid_t pid;
 
-    if(pid == -1){
+    if(pipe(fds) == -1){
         logger_event("FORK_FAILED", "name=%s errno=%d", children[i].name, errno);
+        return -1;
+    }
+    // write end closes itself on a successful exec
+    if(fcntl(fds[1], F_SETFD, FD_CLOEXEC) == -1){
+        int saved = errno;
+        close(fds[0]);
+        close(fds[1]);
+        logger_event("FORK_FAILED", "name=%s errno=%d", children[i].name, saved);
+        errno = saved;
+        return -1;
+    }
+
+    pid = fork();
+    if(pid == -1){
+        int saved = errno;
+        close(fds[0]);
+        close(fds[1]);
+        logger_event("FORK_FAILED", "name=%s errno=%d", children[i].name, saved);
+        errno = saved;
         return -1;
     }
 
@@ -114,16 +138,35 @@ static int spawn(int i){
         sigset_t empty;
         sigemptyset(&empty);
         sigprocmask(SIG_SETMASK, &empty, NULL);
+        close(fds[0]);
 
         execv(WORKER_PATH, worker_argv[i]);
-        perror("execv"); // only reached if exec failed
+
+        // only reached if exec failed: tell the parent why
+        child_errno = errno;
+        (void)!write(fds[1], &child_errno, sizeof(child_errno));
         _exit(127);
     }
 
-    // parent
+    // parent: 0 bytes means exec succeeded, otherwise the child sent errno
+    close(fds[1]);
+    do {
+        n = read(fds[0], &child_errno, sizeof(child_errno));
+    } while(n == -1 && errno == EINTR);
+    close(fds[0]);
+
+    if(n > 0){
+        pid_t r;
+        do {
+            r = waitpid(pid, NULL, 0);   // reap the failed child, no zombie
+        } while(r == -1 && errno == EINTR);
+        logger_event("EXEC_FAILED", "name=%s errno=%d", children[i].name, child_errno);
+        errno = child_errno;
+        return -1;
+    }
+
     children[i].pid = pid;
     children[i].state = CH_RUNNING;
-
     return 0;
 }
 
