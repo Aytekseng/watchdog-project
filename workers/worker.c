@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 
 // print usage to stderr
 static void usage(const char *prog){
@@ -21,8 +22,14 @@ static int ignore_signal(int sig){
 
 // parse a non-negative number of seconds, -1 on bad input
 static int parse_seconds(const char *s, int *out){
-    if (sscanf(s, "%d", out) != 1 || *out < 0)
+    char *end;
+    long v;
+
+    errno = 0;
+    v = strtol(s, &end, 10);
+    if (errno != 0 || end == s || *end != '\0' || v < 0 || v > 3600)
         return -1;
+    *out = (int)v;
     return 0;
 }
 
