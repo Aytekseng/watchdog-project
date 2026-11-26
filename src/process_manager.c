@@ -131,6 +131,14 @@ static int spawn(int i){
 int pm_start_all(void){
     int result = 0;
     
+    // fail early if the worker program cannot be executed
+    if (access(WORKER_PATH, X_OK) == -1){
+        int saved = errno;
+        logger_event("START_FAILED", "path=%s errno=%d", WORKER_PATH, saved);
+        errno = saved;   // keep errno for perror() in main
+        return -1;
+    }
+
     for(int i = 0; i < child_count; i++){
         if(spawn(i) == -1){
             result = -1;
